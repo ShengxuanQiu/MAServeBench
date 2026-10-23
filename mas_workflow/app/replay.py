@@ -58,7 +58,8 @@ def replay_trace(path, deployment, *, trace_dir="traces/replay", strict=False, b
         raise ValueError("Replay graph exceeds configured operation limit")
     backend = backend or build_llm_backend(deployment.backend, model=deployment.model,
                                            backend_base_url=deployment.endpoint,
-                                           max_output_tokens=deployment.generation.get("max_tokens", 256))
+                                           max_output_tokens=deployment.generation.get("max_tokens", 256),
+                                           generation=deployment.generation)
     capability = replay_capabilities(backend)
     if strict:
         raise ValueError("Strict replay unavailable: " + capability["reason"])

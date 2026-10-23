@@ -1,7 +1,4 @@
-"""调度器占位实现。
-
-第一版不真正改 vLLM scheduler，只保留 criticality/cache-aware 调度研究所需接口。
-"""
+'Application-side scheduling heuristics. This module does not modify the backend scheduler.'
 
 from __future__ import annotations
 
@@ -11,7 +8,7 @@ from .state import MASState
 
 
 def compute_agent_priority(state: MASState, agent_name: str, metadata: dict[str, Any] | None = None) -> float:
-    """计算 agent 优先级，支持 criticality-aware 调度。"""
+    'Compute an agent priority for application-side dispatch.'
     metadata = metadata or {}
     is_critical = float(bool(metadata.get("is_critical", _default_is_critical(agent_name))))
     expected_downstream_unblock = float(metadata.get("expected_downstream_unblock", _downstream_unblock(state, agent_name)))
@@ -61,13 +58,13 @@ def _remaining_steps(agent_name: str) -> int:
 
 
 def estimate_cache_residency(state: MASState, agent_name: str) -> float:
-    """估计该 agent 上下文留在 KV cache 中的收益。"""
+    'Estimate the benefit of retaining an agent context in cache.'
     kv_tokens = state.get("estimated_kv_tokens", {}).get(agent_name, 0)
     return min(1.0, kv_tokens / 32768.0)
 
 
 def estimate_remaining_work(state: MASState, agent_name: str) -> float:
-    """估计剩余工作量，第一版用输出 token 和状态粗略估计。"""
+    'Estimate remaining work from output-token targets and agent state.'
     status = state.get("agent_status", {}).get(agent_name, "pending")
     if status == "finished":
         return 0.0
@@ -75,14 +72,14 @@ def estimate_remaining_work(state: MASState, agent_name: str) -> float:
 
 
 def select_next_agent(ready_agents: list[str], state: MASState) -> str:
-    """从 ready agents 中选择下一个执行者，第一版近似 FCFS。"""
+    'Select the next ready agent using an FCFS approximation.'
     if not ready_agents:
         raise ValueError("ready_agents 不能为空")
     return max(ready_agents, key=lambda name: compute_agent_priority(state, name))
 
 
 def build_request_metadata(state: MASState, agent_name: str) -> dict[str, object]:
-    """构造传给 vLLM 的请求元数据。"""
+    'Construct request metadata for the serving backend.'
     metadata = {
         "workflow_id": state.get("workflow_id", ""),
         "agent_id": agent_name,

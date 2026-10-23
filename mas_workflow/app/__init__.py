@@ -1,2 +1,2 @@
-"""复合型 Multi-Agent System workflow 示例包。"""
+'Composed multi-agent workflow examples and benchmark runtime.'
 

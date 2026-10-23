@@ -58,7 +58,10 @@ class TraceBundle:
 
     def read(self) -> SemanticTrace:
         manifest = json.loads((self.root / "manifest.json").read_text(encoding="utf-8"))
-        operations = [json.loads(line) for line in (self.root / manifest.get("operations_file", "operations.jsonl")).read_text(encoding="utf-8").splitlines() if line.strip()]
+        operations_path = (self.root / manifest.get("operations_file", "operations.jsonl")).resolve()
+        if self.root.resolve() not in operations_path.parents:
+            raise ValueError("Operation reference escapes the trace bundle")
+        operations = [json.loads(line) for line in operations_path.read_text(encoding="utf-8").splitlines() if line.strip()]
         trace = SemanticTrace.from_parts(manifest, operations)
         for artifact in trace.artifacts:
             self.artifacts.get_bytes(artifact.payload_ref, artifact.content_hash)

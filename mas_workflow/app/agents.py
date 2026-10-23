@@ -1,4 +1,4 @@
-"""LangGraph 节点实现。"""
+'LangGraph node implementations.'
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ def _shared_context(state: MASState) -> str:
 
 
 def _clip(text: str | None, max_chars: int) -> str:
-    """限制聚合节点输入长度，避免第一版 demo 超过本地模型上下文。"""
+    'Bound aggregation inputs to the configured context window.'
     if not text:
         return ""
     if len(text) <= max_chars:
@@ -77,7 +77,7 @@ def _clip(text: str | None, max_chars: int) -> str:
 
 
 def _query_terms(text: str) -> list[str]:
-    """从任务描述中抽取用于文件优先级排序的轻量关键词。"""
+    'Extract lightweight keywords for file ranking.'
     raw_terms = {
         token.strip("`'\"()[]{}:,. ")
         for token in text.replace("/", " ").replace("_", " ").split()
@@ -90,7 +90,7 @@ def _query_terms(text: str) -> list[str]:
 
 
 def _rank_files(files: list[str], query: str, suffixes: tuple[str, ...], limit: int) -> list[str]:
-    """按 query 关键词把更可能相关的文件排到前面。"""
+    'Rank files by their relevance to query keywords.'
     terms = _query_terms(query)
     file_set = set(files)
     explicit_paths = []
@@ -796,7 +796,7 @@ def make_reviewer_round2_node(llm: LocalLLMClient) -> NodeFn:
 
 
 def broadcast_critique_node(state: MASState) -> dict[str, Any]:
-    """把 reviewer critique 广播给第二轮候选 agent，形成 all-gather-like 输入。"""
+    'Broadcast reviewer feedback to the second-round candidates.'
     agent_name = "broadcast_critique"
     round_id = "round2"
     critique = state.get("review_result", "")
@@ -959,7 +959,7 @@ def make_finalizer_node(llm: LocalLLMClient) -> NodeFn:
 
 
 def review_needs_retry(state: MASState) -> bool:
-    """从 reviewer 文本中保守判断是否需要重试。"""
+    'Conservatively determine whether reviewer feedback requests a retry.'
     text = state.get("review_result", "").lower()
     positive_retry = [
         '"whether_need_retry": true',

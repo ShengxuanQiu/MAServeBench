@@ -1,4 +1,4 @@
-"""LangGraph 全局状态定义。"""
+'Shared state definitions for LangGraph workflows.'
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal, TypedDict
 
 
 def merge_dict(left: dict[str, Any] | None, right: dict[str, Any] | None) -> dict[str, Any]:
-    """合并并行节点返回的字典字段。"""
+    'Merge dictionary fields returned by parallel nodes.'
     merged: dict[str, Any] = {}
     if left:
         merged.update(left)
@@ -20,7 +20,7 @@ AgentStatus = Literal["pending", "running", "blocked", "finished", "failed"]
 
 
 class MASState(TypedDict, total=False):
-    """复合型 MAS workflow 的共享状态。"""
+    'Shared state of a composed multi-agent workflow.'
 
     user_query: str
     repo_path: str
@@ -68,7 +68,7 @@ class MASState(TypedDict, total=False):
 
 
 def initial_agent_dependencies() -> dict[str, list[str]]:
-    """返回第一版 DAG 的依赖关系，便于 trace 和调度研究。"""
+    'Return the example DAG dependencies for tracing and dispatch.'
     return {
         "planner": [],
         "file_agent": ["planner"],

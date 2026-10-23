@@ -1,4 +1,0 @@
-[submodule "vllm"]
-	path = vllm
-	url = git@github.com:ShengxuanQiu/vllm.git
-	branch = MAS

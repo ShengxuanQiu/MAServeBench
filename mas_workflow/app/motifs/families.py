@@ -152,11 +152,11 @@ class FamilyWorkload(WorkloadRuntime):
             if stage.get("dispatch", "plan") not in {"plan", "route"}:
                 raise ValueError("dispatch must be plan or route")
 
-    def _call(self, instance: AgentInstance, task: str, inputs: list[Artifact], *, instruction="", round_id=0, group=None) -> Artifact:
+    def _call(self, instance: AgentInstance, task: str, inputs: list[Artifact], *, instruction="", round_id=0, group=None, control_parents=()) -> Artifact:
         node = "call_" + uuid4().hex
         binding = instance.binding
         ctx = self._stage_context[instance.motif_instance_id]
-        control = list(ctx["parents"]) + list(ctx["round_parents"].get(round_id, []))
+        control = list(dict.fromkeys(list(ctx["parents"]) + list(ctx["round_parents"].get(round_id, [])) + list(control_parents)))
         parents = list(dict.fromkeys([a.producer_node for a in inputs] + control))
         identity = {"stage_instance_id": ctx["id"], "role": ROLE_ALIASES[instance.slot.name],
                     "motif_instance_id": "" if ctx.get("atomic") else instance.motif_instance_id,
@@ -192,7 +192,8 @@ class FamilyWorkload(WorkloadRuntime):
         if binding.model or binding.backend_base_url:
             backend = build_llm_backend(self.config.llm_mode, model=binding.model or self.config.model,
                                         backend_base_url=binding.backend_base_url or self.config.backend_base_url,
-                                        max_output_tokens=self.config.max_output_tokens)
+                                        max_output_tokens=self.config.max_output_tokens,
+                                        generation=self.config.extra.get("generation", {}))
         for parent in control:
             self.trace.emit(event_type="dependency", src=parent, dst=node, dependency_kind="control", **identity)
         for artifact in inputs:
@@ -331,7 +332,8 @@ class FamilyWorkload(WorkloadRuntime):
                 else:
                     instruction = ('Return JSON with "selected_index" (zero-based integer) and "reason". Select one supplied candidate.'
                                    if policy == "judge" else "Synthesize the supplied results into one answer.")
-                    combined = self._call(agent("collector"), task, reduced_values, instruction=instruction)
+                    combined = self._call(agent("collector"), task, reduced_values, instruction=instruction,
+                                          control_parents=[value.producer_node for value in values])
                     if policy == "judge":
                         index = json.loads(combined.content)["selected_index"]
                         if type(index) is not int or not 0 <= index < len(reduced_values):
@@ -348,7 +350,7 @@ class FamilyWorkload(WorkloadRuntime):
                 for revision in range(limit + 1):
                     review_input=deliver_relation(self,stage,'producer_to_reviewer',[candidate],mid)
                     feedback = self._call(agent("evaluator"), task, context + review_input, round_id=revision,
-                                          instruction='Return JSON with "decision": "accept" or "revise", and "feedback": a string. Criteria: ' + stage.get("criteria", "Satisfy the task and its constraints.") + "\n" + stage.get("evaluation_semantics", ""))
+                                          instruction='Return only compact JSON with "decision": "accept" or "revise", and "feedback": a string of at most 20 words. Criteria: ' + stage.get("criteria", "Satisfy the task and its constraints.") + "\n" + stage.get("evaluation_semantics", ""))
                     decision = json.loads(feedback.content)
                     if decision.get("decision") not in {"accept", "revise"} or not isinstance(decision.get("feedback"), str):
                         raise ValueError("Invalid evaluator decision")
@@ -357,7 +359,10 @@ class FamilyWorkload(WorkloadRuntime):
                         status = "accepted"
                         break
                     if revision == limit:
-                        status = "max_revisions"
+                        # Reaching the configured revision bound is a valid
+                        # completion condition. Preserve the reason in
+                        # stage_finish while keeping task execution successful.
+                        status = "completed"
                         break
                     delivered_feedback=deliver_relation(self,stage,'reviewer_to_producer',[feedback],mid)
                     candidate = self._call(agent("producer"), task, context + [candidate]+delivered_feedback, round_id=revision + 1)
