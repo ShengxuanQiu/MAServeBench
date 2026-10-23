@@ -1,4 +1,4 @@
-"""受限本地工具。"""
+'Restricted local tools.'
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ DENY_TOKENS = {
 
 
 def simulated_tool_delay(profile: str = "none", *, burst: bool = False) -> float:
-    """模拟工具等待时间，用于构造 tool stall 和 tool return burst。"""
+    'Simulate external tool delay and return bursts.'
     profile = (profile or "none").lower()
     if profile == "none":
         delay = 0.0
@@ -70,7 +70,7 @@ def _ensure_inside(root: Path, path: Path) -> Path:
 
 
 def safe_list_files(repo_path: str, max_files: int = 100) -> list[str]:
-    """列出 repo 内有限数量的源码和测试文件。"""
+    'List a bounded number of source and test files in a repository.'
     root = _repo_root(repo_path)
     ignored = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", "node_modules"}
     results: list[str] = []
@@ -90,7 +90,7 @@ def safe_read_files(
     file_paths: list[str],
     max_chars_per_file: int = 6000,
 ) -> dict[str, str]:
-    """读取 repo 内有限文件内容。"""
+    'Read bounded file contents inside the repository.'
     root = _repo_root(repo_path)
     contents: dict[str, str] = {}
     for file_path in file_paths:
@@ -123,7 +123,7 @@ def run_pytest(
     test_command: str = "pytest -q",
     timeout: int = 120,
 ) -> dict[str, object]:
-    """在 repo_path 内运行受限 pytest 命令。"""
+    'Run a restricted pytest command inside repo_path.'
     root = _repo_root(repo_path)
     parts = _validate_pytest_command(test_command)
     start = time.perf_counter()

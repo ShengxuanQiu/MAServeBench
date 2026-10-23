@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://masbench.org/schema/scenario-1.0.0.json",
+  "$id": "urn:masbench:schema:scenario-1.0.0.json",
   "title": "Resolved MASBench ScenarioManifest",
   "type": "object",
   "required": ["scenario_id", "benchmark_version", "trace_set_ids", "trace_hashes", "workload_version", "model_input_contract", "replay", "root_arrival", "measurement", "validity", "scenario_version", "resolved_cache_scope_salts", "resolved_request_contracts", "scenario_hash"],

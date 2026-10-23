@@ -141,7 +141,9 @@ def canonicalize_native_trace(source: str | Path, destination: str | Path, *, to
         for aid in agent_ids]
     if not sessions:
         sessions = [AgentSession(f"session:{graph.run_id}", "Worker", None, "root", "explicit", None)]
-    edges = {(src, dst): kind for src, dst, kind in graph.edges}
+    edges: dict[tuple[str, str], set[str]] = {}
+    for src, dst, kind in graph.edges:
+        edges.setdefault((src, dst), set()).add(kind)
     artifact_records = []
     for aid, artifact in graph.artifacts.items():
         ref, digest = bundle.artifacts.put_json(artifact["content"])
@@ -153,12 +155,13 @@ def canonicalize_native_trace(source: str | Path, destination: str | Path, *, to
             inheritance_relation=delivery.get("delivery_mode", "fresh"), reuse_scope_id=delivery.get("reuse_scope_id") or producer_scope, consumer_operation_ids=consumers))
     operations = []
     for oid, op in graph.operations.items():
-        control = sorted(src for src in op.parents if edges.get((src, oid), "control") == "control")
-        data = sorted(src for src in op.parents if edges.get((src, oid)) == "data")
+        control = sorted(src for src in op.parents if "control" in edges.get((src, oid), {"control"}))
+        data = sorted(src for src in op.parents if "data" in edges.get((src, oid), set()))
+        state = sorted(src for src in op.parents if "state" in edges.get((src, oid), set()))
         common = dict(operation_id=oid, operation_type="transform" if op.kind in {"router", "retrieval"} else op.kind,
                       task_id=task_id, stage_instance_id=op.identities.get("stage_instance_id") or stage_records[0].stage_instance_id,
                       session_id=op.identities.get("agent_instance_id") or sessions[0].session_id,
-                      control_dependencies=control, data_dependencies=data,
+                      control_dependencies=control, data_dependencies=data, state_dependencies=state,
                       source_observations={"duration_sec": op.duration_sec, "duration_kind": "source_observation",
                                            "events": observations.get(oid, [])})
         if op.kind == "llm":

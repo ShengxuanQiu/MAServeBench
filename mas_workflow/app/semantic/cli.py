@@ -19,8 +19,10 @@ from .validators import LoweringValidator, SemanticValidator
 
 def load_scenario(path: str) -> ScenarioManifest:
     value = json.loads(Path(path).read_text(encoding="utf-8"))
-    value.pop("scenario_hash", None)
-    return ScenarioManifest(**value).resolve(value.get("resolved_cache_scope_salts", {}).keys())
+    scenario = ScenarioManifest(**value)
+    if not scenario.scenario_hash or scenario.compute_hash() != scenario.scenario_hash:
+        raise ValueError("Expected an intact resolved scenario; use resolve-scenario for templates")
+    return scenario
 
 
 def load_system(path: str) -> SystemConfig:

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://masbench.org/schema/benchmark-result-1.0.0.json",
+  "$id": "urn:masbench:schema:benchmark-result-1.0.0.json",
   "title": "MASBench task-level metrics",
   "type": "object",
   "required": ["schema_version", "run_valid", "task_latency_sec", "task_goodput", "slo_attainment", "attempted_tasks", "slo_compliant_tasks", "resource_efficiency_tasks_per_sec_per_accelerator", "sustainable_capacity"],

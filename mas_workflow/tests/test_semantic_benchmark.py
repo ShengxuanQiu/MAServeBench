@@ -242,3 +242,26 @@ def test_lowering_provenance_validator(tmp_path):
         "semantic_to_chakra_nodes": {x.operation_id: [str(i)] for i, x in enumerate(fork.operations)},
         "chakra_node_to_semantic": {str(i): x.operation_id for i, x in enumerate(fork.operations)}, "chakra_edges": []}
     assert "MISSING_DEPENDENCY" in LoweringValidator().validate(fork, broken).invalid_reasons
+
+
+def test_canonicalization_preserves_control_and_data_on_same_pair(tmp_path):
+    from collections import Counter
+    from app.execution_graph import ExecutionGraph
+    from app.publication import preset
+
+    experiment = preset("parallel_refine", TaskBinding("test"), DeploymentSpec(),
+                        width=2, max_revisions=1)
+    runner = build_experiment(experiment, trace_dir=tmp_path / "native")
+    assert runner.run()["status"] == "completed"
+    events = [json.loads(line) for line in runner.trace.trace_path.read_text().splitlines()]
+    source = ExecutionGraph.from_events(events, replay=True)
+    assert max(Counter((src, dst) for src, dst, _ in source.edges).values()) > 1
+    trace = canonicalize_native_trace(runner.trace.trace_path, tmp_path / "semantic",
+                                     tokenizer=ByteTokenizer(), workload_id="multi-edge")
+    target = {(parent, op.operation_id, kind) for op in trace.operations
+              for kind, field in (("control", "control_dependencies"),
+                                  ("data", "data_dependencies"),
+                                  ("state", "state_dependencies"))
+              for parent in getattr(op, field)}
+    assert target == source.edges
+    assert SemanticValidator().validate(trace).run_valid

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://masbench.org/schema/semantic-operation-1.0.0.json",
+  "$id": "urn:masbench:schema:semantic-operation-1.0.0.json",
   "title": "MASBench Semantic Operation",
   "type": "object",
   "required": ["operation_id", "operation_type", "task_id", "stage_instance_id", "iteration", "control_dependencies", "data_dependencies", "state_dependencies", "controlled_external_delay", "source_observations"],

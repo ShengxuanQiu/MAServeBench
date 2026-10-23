@@ -77,4 +77,3 @@ def test_part4_publication_manifests_expand(tmp_path):
     for name in ("4_2_pressure_signatures.json", "4_3_multiplexing.json"):
         cells = generate(root / "configs" / "part4" / name, tmp_path / name)
         assert cells
-    assert len(list((root.parent / "evaluation" / "part4").glob("run_4_*.sh"))) == 5

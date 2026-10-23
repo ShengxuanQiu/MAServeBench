@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://masbench.org/schema/semantic-trace-1.0.0.json",
+  "$id": "urn:masbench:schema:semantic-trace-1.0.0.json",
   "title": "MASBench Semantic Trace Manifest",
   "type": "object",
   "required": ["schema_version", "metadata", "tasks", "stages", "sessions", "artifacts", "operations_file"],

@@ -1,4 +1,4 @@
-"""LangGraph workflow 编排。"""
+'LangGraph workflow orchestration.'
 
 from __future__ import annotations
 
@@ -24,11 +24,7 @@ from .state import MASState
 
 
 def build_workflow(llm: LocalLLMClient):
-    """构建动态争用 MAS DAG。
-
-    第一版仍使用 LangGraph 的并行 fan-out/fan-in；真正的 LLM 争用由
-    LLMDispatcher 在每个 agent 的 LLM 调用处统一制造和记录。
-    """
+    'Build a contention workflow using parallel fan-out and fan-in. LLMDispatcher controls and records application-side admission.'
     graph = StateGraph(MASState)
 
     graph.add_node("planner", make_planner_node(llm))

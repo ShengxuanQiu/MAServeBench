@@ -1,4 +1,4 @@
-"""本地 vLLM OpenAI-compatible endpoint 客户端。"""
+'Client for a local vLLM OpenAI-compatible endpoint.'
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ DEFAULT_MODEL = "local-mas-model"
 
 
 class LocalLLMClient:
-    """封装 langchain_openai.ChatOpenAI，并提供 OpenAI SDK fallback。"""
+    'Wrap ChatOpenAI with OpenAI SDK and standard-library HTTP fallbacks.'
 
     def __init__(
         self,
@@ -34,7 +34,7 @@ class LocalLLMClient:
         self._chat = None
 
     def is_available(self, timeout: float = 3.0) -> tuple[bool, str]:
-        """检查 vLLM endpoint 是否可访问。"""
+        'Check whether the serving endpoint is reachable.'
         request = urllib.request.Request(
             f"{self.base_url}/models",
             headers={"Authorization": f"Bearer {self.api_key}"},
@@ -54,7 +54,7 @@ class LocalLLMClient:
         metadata: dict[str, Any] | None = None,
         max_tokens: int | None = None,
     ) -> str:
-        """调用本地模型。"""
+        'Invoke the local model.'
         content, _ = self.invoke_with_metadata(system_prompt, user_prompt, metadata=metadata, max_tokens=max_tokens)
         return content
 
@@ -65,7 +65,7 @@ class LocalLLMClient:
         metadata: dict[str, Any] | None = None,
         max_tokens: int | None = None,
     ) -> tuple[str, dict[str, Any]]:
-        """调用本地模型，并返回 OpenAI-compatible 响应元数据。"""
+        'Invoke the model and return OpenAI-compatible response metadata.'
         http_error: Exception | None = None
         try:
             return self.invoke_streaming_with_metadata(system_prompt, user_prompt, metadata=metadata, max_tokens=max_tokens)
@@ -301,7 +301,7 @@ class LocalLLMClient:
         metadata: dict[str, Any] | None = None,
         max_tokens: int | None = None,
     ) -> tuple[str, dict[str, Any]]:
-        """使用标准库直连 OpenAI-compatible chat completions。"""
+        'Call chat completions directly through the standard library.'
         self._ensure_local_no_proxy()
         payload = {
             "model": self.model,
@@ -347,7 +347,7 @@ class LocalLLMClient:
         }
 
     def _ensure_local_no_proxy(self) -> None:
-        """本地 endpoint 调用不应经过外部 HTTP proxy。"""
+        'Connect to local endpoints without an external HTTP proxy.'
         if "127.0.0.1" in self.base_url or "localhost" in self.base_url:
             for key in (
                 "HTTP_PROXY",
@@ -367,5 +367,5 @@ class LocalLLMClient:
 
 
 def to_json_prompt(payload: dict[str, Any]) -> str:
-    """把节点输入组织成中文 JSON 文本，便于模型稳定读取。"""
+    'Serialize node inputs as JSON for the model.'
     return json.dumps(payload, ensure_ascii=False, indent=2)

@@ -1,8 +1,4 @@
-"""统一 LLM 调度器。
-
-第一版调度器运行在 workflow 上层，不修改 vLLM 内部源码。所有 agent 的 LLM
-请求都会先进入本地 ready queue，再由调度策略决定何时提交给 vLLM endpoint。
-"""
+'Application-level LLM dispatcher. Requests enter a local ready queue before submission to the serving endpoint.'
 
 from __future__ import annotations
 
@@ -18,7 +14,7 @@ from .tracing import make_event
 
 @dataclass
 class DispatcherResponse:
-    """LLMDispatcher 返回给 agent node 的结果。"""
+    'Result returned by LLMDispatcher to an agent node.'
 
     content: str
     events: list[dict[str, Any]]
@@ -26,7 +22,7 @@ class DispatcherResponse:
 
 
 class LLMDispatcher:
-    """带 ready queue 和并发上限的 LLM 请求调度器。"""
+    'Dispatch LLM requests with a ready queue and concurrency limit.'
 
     def __init__(
         self,
@@ -57,7 +53,7 @@ class LLMDispatcher:
         priority: float,
         max_tokens: int | None = None,
     ) -> DispatcherResponse:
-        """提交一个 LLM 请求，并阻塞直到请求完成。"""
+        'Submit an LLM request and wait for completion.'
         request_id = str(uuid.uuid4())
         queue_enter_perf = time.perf_counter()
         metadata = dict(metadata)
