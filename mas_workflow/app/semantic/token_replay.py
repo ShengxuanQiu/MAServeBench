@@ -16,6 +16,17 @@ from .model import SCHEMA_VERSION
 from .replay import BackendResult
 
 
+def validate_engine_profile(config: dict[str, Any]) -> None:
+    if not config.get("enable_trace_replay"):
+        raise ValueError("Engine config must explicitly enable_trace_replay")
+    if config.get("speculative_config") or config.get("async_scheduling") is not False:
+        raise ValueError("Set async_scheduling=false explicitly; speculative decoding is unsupported")
+    for key in ("tensor_parallel_size", "pipeline_parallel_size", "data_parallel_size",
+                "decode_context_parallel_size", "prefill_context_parallel_size"):
+        if config.get(key, 1) != 1:
+            raise ValueError("The verified profile requires one device: " + key)
+
+
 def validate_token_request(llm: dict[str, Any], input_ids: list[int], *,
                            vocab_size: int, max_model_len: int) -> list[int]:
     ids = llm.get("recorded_output_token_ids")
@@ -52,14 +63,9 @@ class VLLMEngineBackend:
             raise ValueError("Validated token backend requires CUDA vLLM 0.30.0; Ascend is unsupported")
         if "trace_decode_token_ids" not in SamplingParams.__struct_fields__:
             raise ValueError("Installed vLLM lacks official trace_decode_token_ids")
-        if not config.get("enable_trace_replay"):
-            raise ValueError("Engine config must explicitly enable_trace_replay")
+        validate_engine_profile(config)
         if os.environ.get("VLLM_USE_V2_MODEL_RUNNER") != "1":
             raise ValueError("Set VLLM_USE_V2_MODEL_RUNNER=1 before starting the engine")
-        if config.get("speculative_config") or config.get("async_scheduling"):
-            raise ValueError("Speculative decoding and async scheduling are not validated by this adapter")
-        if config.get("tensor_parallel_size", 1) != 1 or config.get("pipeline_parallel_size", 1) != 1:
-            raise ValueError("This adapter's validated scope is one CUDA device")
         self.config = dict(config)
         from transformers import AutoConfig
         if AutoConfig.from_pretrained(config["model"]).model_type != "qwen3":
@@ -92,6 +98,8 @@ class VLLMEngineBackend:
             raise TimeoutError("vLLM request timed out; generation cancelled, replay invalid") from None
 
     def validate_trace(self, trace, scenario, system):
+        if system.backend_name != "vllm-gpu":
+            raise ValueError("The official token engine must be declared as vllm-gpu")
         if trace.metadata.schema_version != SCHEMA_VERSION:
             raise ValueError("Unsupported token replay trace version")
         if system.backend_version != "0.30.0":

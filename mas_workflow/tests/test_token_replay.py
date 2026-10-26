@@ -4,7 +4,7 @@ import pytest
 import asyncio
 from types import SimpleNamespace
 
-from app.semantic.token_replay import validate_token_request, VLLMEngineBackend
+from app.semantic.token_replay import validate_token_request, validate_engine_profile, VLLMEngineBackend
 from app.semantic.model import OperationRecord
 from app.semantic.canonicalize import ByteTokenizer, canonicalize_native_trace
 from app.semantic.replay import MockExactBackend, ReplayExecutor
@@ -15,6 +15,22 @@ from app.llm_client import LocalLLMClient
 def valid():
     return {"recorded_output_token_ids":[1,9,2],"recorded_output_length":3,
             "recorded_output_token_source":"backend_token_ids"}
+
+
+@pytest.mark.parametrize("change", [{"async_scheduling":None},{"async_scheduling":True},
+    {"enable_trace_replay":False},{"speculative_config":{"method":"ngram"}},
+    {"tensor_parallel_size":2},{"pipeline_parallel_size":2},{"data_parallel_size":2},
+    {"decode_context_parallel_size":2},{"prefill_context_parallel_size":2}])
+def test_unverified_engine_profiles_are_rejected(change):
+    with pytest.raises(ValueError):
+        validate_engine_profile({"enable_trace_replay":True,"async_scheduling":False,**change})
+    validate_engine_profile({"enable_trace_replay":True,"async_scheduling":False})
+
+
+def test_mislabelled_engine_backend_is_rejected():
+    backend=object.__new__(VLLMEngineBackend)
+    with pytest.raises(ValueError,match="vllm-gpu"):
+        backend.validate_trace(None,None,SimpleNamespace(backend_name="vllm-ascend"))
 
 
 @pytest.mark.parametrize("change", [
