@@ -70,6 +70,8 @@ class LocalLLMClient:
         try:
             return self.invoke_streaming_with_metadata(system_prompt, user_prompt, metadata=metadata, max_tokens=max_tokens)
         except Exception as exc:
+            if (metadata or {}).get("_request_payload", {}).get("return_token_ids"):
+                raise RuntimeError("Native token-ID capture failed; fallback clients cannot preserve exact IDs") from exc
             http_error = exc
         try:
             return self._invoke_langchain(system_prompt, user_prompt, max_tokens=max_tokens), {}
@@ -183,6 +185,9 @@ class LocalLLMClient:
         response_model = None
         finish_reason = None
         system_fingerprint = None
+        output_token_ids: list[int] = []
+        token_ids_reported = False
+        token_stop_reason = None
         with opener.open(request, timeout=180) as response:
             for raw_line in response:
                 line = raw_line.decode("utf-8", errors="replace").strip()
@@ -198,6 +203,14 @@ class LocalLLMClient:
                 if item.get("usage"):
                     usage = item["usage"]
                 choice = (item.get("choices") or [{}])[0]
+                if choice.get("token_ids") is not None:
+                    ids = choice["token_ids"]
+                    if not isinstance(ids, list) or any(type(x) is not int or x < 0 for x in ids):
+                        raise ValueError("Backend returned invalid output token IDs")
+                    output_token_ids.extend(ids)
+                    token_ids_reported = True
+                if choice.get("stop_reason") is not None:
+                    token_stop_reason = choice["stop_reason"]
                 finish_reason = choice.get("finish_reason") or finish_reason
                 delta = choice.get("delta") or {}
                 piece = delta.get("content") or ""
@@ -223,6 +236,10 @@ class LocalLLMClient:
         completion_perf = time.perf_counter()
         content = "".join(content_parts) or "".join(reasoning_parts)
         completion_tokens = int(usage.get("completion_tokens") or sum(chunk_token_counts) or 0)
+        if payload.get("return_token_ids") and not token_ids_reported:
+            raise ValueError("Backend did not return requested native token IDs")
+        if token_ids_reported and len(output_token_ids) != completion_tokens:
+            raise ValueError("Backend token IDs disagree with completion usage")
         ttft = max(0.0, first_token_ts - request_start_wall) if first_token_ts is not None else None
         tpot = None
         if first_token_ts is not None and completion_tokens > 1:
@@ -231,6 +248,7 @@ class LocalLLMClient:
         intervals_ms = [1000.0 * gap for gap in chunk_gaps]
         first_token_ms = 1000.0 * ttft if ttft is not None else None
         return content, {
+            **({"output_token_ids": output_token_ids, "stop_reason": token_stop_reason} if token_ids_reported else {}),
             "response_id": response_id,
             "model": response_model,
             "finish_reason": finish_reason,

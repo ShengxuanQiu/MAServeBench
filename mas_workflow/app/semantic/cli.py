@@ -47,7 +47,9 @@ def main(argv=None):
     p = sub.add_parser("golden"); p.add_argument("--output", required=True); p.add_argument("--template", choices=TEMPLATES + ("all",), default="all")
     p = sub.add_parser("replay"); p.add_argument("--trace", required=True); p.add_argument("--scenario", required=True)
     p.add_argument("--system", required=True); p.add_argument("--output", required=True)
-    p.add_argument("--backend", choices=("synthetic", "vllm-openai"), required=True); p.add_argument("--base-url"); p.add_argument("--api-key", default="EMPTY")
+    p.add_argument("--backend", choices=("synthetic", "vllm-openai", "vllm-engine"), required=True); p.add_argument("--base-url"); p.add_argument("--api-key", default="EMPTY")
+    p.add_argument("--engine-config", help="Explicit AsyncEngineArgs JSON for the opt-in official token backend")
+    p.add_argument("--tokenizer", help="Tokenizer path for the opt-in engine backend")
     p = sub.add_parser("measure"); p.add_argument("--run", required=True); p.add_argument("--output", required=True)
     p.add_argument("--slo-sec", type=float, required=True); p.add_argument("--accelerators", type=int, required=True); p.add_argument("--power-watts", type=float)
     p = sub.add_parser("capacity"); p.add_argument("--cells", required=True); p.add_argument("--attainment-target", required=True, type=float); p.add_argument("--output", required=True)
@@ -94,8 +96,18 @@ def main(argv=None):
         print(json.dumps({"golden_traces": list(templates)}))
     elif args.command == "replay":
         bundle = TraceBundle(args.trace); trace = bundle.read(); scenario = load_scenario(args.scenario); system = load_system(args.system)
-        backend = MockExactBackend() if args.backend == "synthetic" else VLLMOpenAIBackend(args.base_url, args.api_key)
-        result = ReplayExecutor(trace, scenario, system, backend, bundle.artifacts).run(); write(args.output, result)
+        if args.backend == "vllm-engine":
+            from .token_replay import VLLMEngineBackend
+            if not args.engine_config or not args.tokenizer:
+                raise ValueError("vllm-engine requires --engine-config and --tokenizer")
+            backend = VLLMEngineBackend(json.loads(Path(args.engine_config).read_text()), args.tokenizer)
+        else:
+            backend = MockExactBackend() if args.backend == "synthetic" else VLLMOpenAIBackend(args.base_url, args.api_key)
+        try:
+            result = ReplayExecutor(trace, scenario, system, backend, bundle.artifacts).run(); write(args.output, result)
+        finally:
+            if args.backend == "vllm-engine":
+                backend.close()
         print(json.dumps({"run_valid": result["run_valid"], "invalid_reasons": result["invalid_reasons"]})); raise SystemExit(0 if result["run_valid"] else 2)
     elif args.command == "measure":
         result = task_metrics(json.loads(Path(args.run).read_text()), slo_sec=args.slo_sec, accelerator_count=args.accelerators, physical_power_watts=args.power_watts)

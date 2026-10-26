@@ -172,14 +172,24 @@ def canonicalize_native_trace(source: str | Path, destination: str | Path, *, to
             output_text = str(produced[1]["content"]) if produced and produced[1].get("content") is not None else None
             retokenized_output = tokenizer.encode_text(output_text) if output_text is not None else None
             recorded_length = op.output_tokens if isinstance(op.output_tokens, int) else (len(retokenized_output) if retokenized_output is not None else None)
+            backend_metadata = next((e.get("request_metadata", {}) for e in reversed(events)
+                                     if e.get("operation_id", e.get("node_id")) == oid
+                                     and e.get("request_metadata", {}).get("output_token_ids") is not None), {})
+            native_ids = backend_metadata.get("output_token_ids")
+            if native_ids is not None and (not isinstance(native_ids, list) or
+                    any(type(x) is not int or x < 0 for x in native_ids) or len(native_ids) != recorded_length):
+                raise ValueError(f"Invalid backend output token IDs for {oid}")
             output_ref = next((x.payload_ref for x in artifact_records if produced and x.artifact_id == produced[0]), None)
             payload = {"canonical_request": request, "input_token_ids": token_ids, "input_token_count": len(token_ids),
                        "tokenizer": tokenizer.identity, "chat_template": tokenizer.chat_template,
                        "generation_parameters": {k: request[k] for k in request if k not in {"messages", "model"}},
-                       "recorded_output_token_ids": retokenized_output, "recorded_output_token_source": "retokenized_output_text" if retokenized_output is not None else "unavailable",
+                       "recorded_output_token_ids": native_ids if native_ids is not None else retokenized_output,
+                       "recorded_output_token_source": "backend_token_ids" if native_ids is not None else ("retokenized_output_text" if retokenized_output is not None else "unavailable"),
                        "recorded_output_length": recorded_length,
                        "recorded_output_ref": output_ref, "context_artifact_ids": context_ids,
                        "reuse_scope_id": op.metadata.get("reuse_scope_id")}
+            if native_ids is not None:
+                payload["recorded_termination"] = {key: backend_metadata.get(key) for key in ("backend_finish_reason", "backend_stop_reason")}
             operations.append(OperationRecord(**common, llm=payload))
         else:
             ref, digest = bundle.artifacts.put_json(op.snapshot)

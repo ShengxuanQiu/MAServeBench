@@ -20,6 +20,7 @@ def main():
     parser.add_argument("--accelerators", type=int, default=1)
     parser.add_argument("--cache-policy", choices=("preserve_native", "reuse_scope_isolated"), default="preserve_native")
     parser.add_argument("--output", required=True)
+    parser.add_argument("--fidelity-mode", choices=("length_locked", "token_locked"), default="length_locked")
     args = parser.parse_args()
     trace = TraceBundle(args.trace).read()
     tokenizer = TransformersTokenizer(args.tokenizer)
@@ -29,7 +30,7 @@ def main():
         {trace.metadata.trace_id: trace.metadata.workload_hash}, trace.metadata.workload_version,
         {"model_identity": model, "tokenizer_hash": tokenizer.identity["hash"],
          "chat_template_hash": tokenizer.chat_template["hash"], "generation_parameters": {}},
-        {"fidelity_mode": "length_locked", "tool_replay_policy": "recorded",
+        {"fidelity_mode": args.fidelity_mode, "tool_replay_policy": "recorded",
          "external_delay_policy": "deterministic", "cache_policy": args.cache_policy},
         {"mode": "trace_offsets", "concurrency": 1, "random_seed": 42,
          "task_mix": {trace.metadata.trace_id: 1.0}},
@@ -39,7 +40,9 @@ def main():
     scenario.resolve([s.reuse_scope_id for s in trace.sessions if s.reuse_scope_id], trace, tokenizer.encode_request)
     system = SystemConfig(args.backend, args.backend_version, args.hardware, args.accelerators,
         model_identity=model, tokenizer_hash=tokenizer.identity["hash"], chat_template_hash=tokenizer.chat_template["hash"],
-        capabilities={"supports_length_lock": True, "supports_token_lock": False})
+        capabilities={"supports_length_lock": True, "supports_token_lock": args.fidelity_mode == "token_locked"})
+    if args.fidelity_mode == "token_locked" and (args.backend != "vllm-gpu" or args.backend_version != "0.30.0"):
+        raise ValueError("token_locked requires the documented vllm-engine CUDA 0.30.0 backend")
     report = RunValidator().validate(trace, scenario, system)
     if not report.run_valid:
         raise ValueError(report.to_dict())
