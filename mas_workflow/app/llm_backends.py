@@ -151,6 +151,8 @@ class OpenAICompatibleLLM:
             generation_end_ts=end,
             duration_sec=end - dispatch_start,
             request_metadata={
+                **({"output_token_ids": response_metadata["output_token_ids"],
+                    "backend_stop_reason": response_metadata.get("stop_reason")} if "output_token_ids" in response_metadata else {}),
                 "x_request_id": request_id,
                 "backend_response_id": response_metadata.get("response_id"),
                 "backend_finish_reason": response_metadata.get("finish_reason"),

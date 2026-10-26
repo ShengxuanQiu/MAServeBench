@@ -99,6 +99,8 @@ class ReplayExecutor:
         if not preflight.run_valid:
             return {"schema_version": "masbench.run/1.0.0", **preflight.to_dict(), "scenario_hash": self.scenario.scenario_hash,
                     "workload_hash": self.trace.metadata.workload_hash, "system_hash": self.system.system_hash(), "operations": []}
+        if hasattr(self.backend, "validate_trace"):
+            self.backend.validate_trace(self.trace, self.scenario, self.system)
         operations = {x.operation_id: x for x in self.trace.operations}
         tasks = {x.task_id: x for x in self.trace.tasks}
         ordered_tasks = sorted(tasks)
@@ -147,6 +149,8 @@ class ReplayExecutor:
             if op.operation_type == "llm":
                 request, request_hash = materialize_request(op, self.scenario)
                 response = self.backend.generate(request, op, self.scenario.replay["fidelity_mode"])
+                if self.scenario.replay["fidelity_mode"] == "token_locked":
+                    record["output_token_ids"] = response.output_token_ids
                 record.update({"request_hash": request_hash, "output_length": response.output_length,
                                "target_observations": response.observations})
                 expected = int(op.llm["recorded_output_length"])

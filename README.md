@@ -164,7 +164,10 @@ data, and state predecessors must complete on the target before release.
 
 The vLLM adapter supports `length_locked` through `min_tokens`, `max_tokens`, and
 `ignore_eos`, and invalidates completion-length mismatches. Exact output
-`token_locked` is implemented by the synthetic conformance backend only.
+`token_locked` additionally has an explicit, official-engine CUDA adapter;
+native output IDs and a compatible vLLM Model Runner V2 are required. Existing
+OpenAI/Ascend adapters reject this mode. See [token replay](docs/TOKEN_REPLAY.md)
+for the backend scope, recording contract, and real-device acceptance command.
 The older `app.benchmark replay` / `app.replay` path is a separate, best-effort
 native-event replay interface. Use Semantic Trace replay for the stricter contract.
 
