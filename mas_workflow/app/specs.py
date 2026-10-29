@@ -133,7 +133,7 @@ class AtomicStage:
     kind: str = "llm"
     role: str = "Worker"
     def __post_init__(self):
-        if self.kind not in {"llm", "transform", "router", "tool"} or self.role not in ROLES:
+        if self.kind not in {"llm", "transform", "router", "tool", "state_read", "state_write"} or self.role not in ROLES:
             raise ValueError("Invalid AtomicStage kind/role")
 
 

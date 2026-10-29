@@ -65,4 +65,8 @@ class TraceBundle:
         trace = SemanticTrace.from_parts(manifest, operations)
         for artifact in trace.artifacts:
             self.artifacts.get_bytes(artifact.payload_ref, artifact.content_hash)
+        for op in trace.operations:
+            payload = op.tool or op.transform or op.state
+            if payload and payload.get("recorded_result_ref"):
+                self.artifacts.get_bytes(payload["recorded_result_ref"], payload.get("content_hash"))
         return trace

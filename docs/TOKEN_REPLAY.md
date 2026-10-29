@@ -71,7 +71,7 @@ from this matrix.
 
 ## Verified finite gate (2026-10-27)
 
-Both branches pass 211 CPU tests. On CUDA vLLM 0.30.0 / Runner V2 / Qwen3-4B-Instruct-2507 / RTX PRO 5000 72GB, 16 real native roots supply 66 captured model requests. The gate replays 198 token-locked requests (16077 exact output IDs) and 198 length-locked requests across both cache settings. Every token-locked request emits its full recorded ID array, with one observed engine output update per generated token. Each paired arm starts after a confirmed prefix-cache reset. An independent EOS-containing fixture passes in both cache settings.
+The 2026-10-27 gate used 211 CPU tests. On CUDA vLLM 0.30.0 / Runner V2 / Qwen3-4B-Instruct-2507 / RTX PRO 5000 72GB, 16 real native roots supply 66 captured model requests. The gate replays 198 token-locked requests (16077 exact output IDs) and 198 length-locked requests across both cache settings. Every token-locked request emits its full recorded ID array, with one observed engine output update per generated token. Each paired arm starts after a confirmed prefix-cache reset. An independent EOS-containing fixture passes in both cache settings.
 
 Paired wall-time ratios (token/length), three-block median [minimum, maximum]:
 

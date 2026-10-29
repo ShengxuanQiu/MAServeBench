@@ -6,6 +6,8 @@ outputs/
 build/
 traces/
 results/
+# Local paper experiments are maintained outside the core release.
+/experiments/
 .env
 .env.*
 *.pem

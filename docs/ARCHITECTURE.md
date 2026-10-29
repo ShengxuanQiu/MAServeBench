@@ -30,11 +30,16 @@ timestamps do not become dependency edges or target service times.
 
 Semantic Trace stores `control_dependencies`, `data_dependencies`, and
 `state_dependencies`; replay waits for their union. The native ExecutionGraph
-adapter currently accepts control/data edges. The Semantic Trace state model can
-represent state provenance, but the native exporter does not reconstruct arbitrary
-external state-store operations or inherited session lifecycles. Exported native
-agent sessions currently use root/explicit defaults. Golden fixtures exercise
-richer lifecycle records directly.
+adapter accepts control/data/state edges. Atomic `state_read` and `state_write`
+stages execute against a run-local versioned store; collection retains exact
+versions, writers/readers, and frozen value snapshots. Explicit snapshot
+restoration initializes a new run without carrying source operation IDs across
+runs. Exported agent sessions use root/explicit defaults when richer lifecycle
+provenance is absent.
+
+`versioned_state.py` implements the state store. `measurements.py` records and
+joins scheduling, batch and operator observations using explicit clock alignment.
+See [state and measurement APIs](STATE_AND_MEASUREMENTS.md).
 
 ## Public pipeline
 

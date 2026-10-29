@@ -1,7 +1,9 @@
 # Reproducibility status
 
-The Linux release validation passes 176 tests on each branch with Python 3.12 and the pinned CPU dependencies
-in `requirements-repro.txt`. It checks the entire retained test suite, JSON schemas,
+The CPU release validation passes 243 tests on each branch with Python 3.12 and
+the pinned dependencies in `requirements-repro.txt`. The latest local check ran
+on Windows; GitHub CI runs the same suite on Linux. It checks the entire retained
+test suite, JSON schemas,
 four synthetic Semantic Trace pipelines, native mock execution, example generation,
 optional serialization, and structural matrix expansion. Tests include HTTP wire
 protocol fixtures and generation-forwarding regressions. The source/privacy scan also checks all public Markdown and Python comments/docstrings for the English-only release requirement.

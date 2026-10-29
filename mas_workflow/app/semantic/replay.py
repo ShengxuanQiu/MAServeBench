@@ -7,6 +7,7 @@ import threading
 import time
 import urllib.request
 import random
+import uuid
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, field
 from typing import Any, Protocol
@@ -65,8 +66,10 @@ class VLLMOpenAIBackend:
         # trace may legitimately record them, but replay controls streaming.
         payload.pop("stream_options", None)
         body = json.dumps(payload).encode("utf-8")
+        client_request_id = "masbench-" + uuid.uuid4().hex
         req = urllib.request.Request(self.base_url + "/chat/completions", data=body, method="POST",
-            headers={"Content-Type": "application/json", "Authorization": "Bearer " + self.api_key})
+            headers={"Content-Type": "application/json", "Authorization": "Bearer " + self.api_key,
+                     "X-Request-Id": client_request_id})
         started = time.perf_counter()
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(req, timeout=self.timeout) as response:
@@ -75,7 +78,9 @@ class VLLMOpenAIBackend:
         usage = value.get("usage") or {}
         text = ((value.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
         length = int(usage.get("completion_tokens") or 0)
-        return BackendResult(text, None, length, {"wall_time_sec": elapsed, "usage": usage, "backend_response_id": value.get("id")})
+        return BackendResult(text, None, length, {"wall_time_sec": elapsed, "usage": usage,
+            "backend_response_id": value.get("id"), "client_request_id": client_request_id,
+            "request_submit_perf": started, "request_completion_perf": started + elapsed})
 
 
 def materialize_request(operation: OperationRecord, scenario: ScenarioManifest) -> tuple[dict[str, Any], str]:
@@ -85,6 +90,30 @@ def materialize_request(operation: OperationRecord, scenario: ScenarioManifest) 
     if contract.get("request_hash") != request_hash:
         raise ValueError(f"Resolved request contract mismatch for {operation.operation_id}")
     return request, request_hash
+
+
+def verify_target_input(observations: dict[str, Any], contract: dict[str, Any]) -> dict[str, Any]:
+    """Compare target-reported inputs, retaining an explicit unavailable state."""
+    expected = contract["input_token_count"]
+    result = {"status": "unavailable", "expected_input_token_count": expected,
+              "reported_input_token_count": None, "method": None}
+    ids = observations.get("prompt_token_ids")
+    usage = observations.get("usage") or {}
+    if ids is not None:
+        valid = isinstance(ids, list) and all(type(x) is int and x >= 0 for x in ids)
+        result.update(status="verified" if valid and ids == contract["input_token_ids"] else "mismatch",
+                      reported_input_token_count=len(ids) if isinstance(ids, list) else None,
+                      method="backend_prompt_token_ids")
+    else:
+        if "prompt_tokens" in usage:
+            count = usage["prompt_tokens"]
+            result.update(status="verified" if type(count) is int and count == expected else "mismatch",
+                          reported_input_token_count=count, method="backend_usage")
+    if ids is not None and "prompt_tokens" in usage:
+        count = usage["prompt_tokens"]
+        if type(count) is not int or count != expected:
+            result.update(status="mismatch", reported_usage_input_token_count=count)
+    return result
 
 
 class ReplayExecutor:
@@ -133,6 +162,7 @@ class ReplayExecutor:
         operation_finish: dict[str, float] = {}
         run_start = time.perf_counter()
         lock = threading.Lock()
+        state_values: dict[tuple[str, int], Any] = {}
 
         def execute(op: OperationRecord, path_external_delay: float) -> dict[str, Any]:
             predecessor_finished = time.perf_counter()
@@ -142,6 +172,7 @@ class ReplayExecutor:
             with lock:
                 task_start.setdefault(op.task_id, ready)
             record: dict[str, Any] = {"operation_id": op.operation_id, "task_id": op.task_id,
+                "stage_instance_id": op.stage_instance_id, "session_id": op.session_id, "iteration": op.iteration,
                 "ready_time": ready - run_start, "controlled_external_delay": op.controlled_external_delay,
                 "controlled_external_delay_on_path": path_external_delay,
                 "source_observations_used_for_scheduling": False}
@@ -153,6 +184,11 @@ class ReplayExecutor:
                     record["output_token_ids"] = response.output_token_ids
                 record.update({"request_hash": request_hash, "output_length": response.output_length,
                                "target_observations": response.observations})
+                verification = verify_target_input(response.observations,
+                    self.scenario.resolved_request_contracts[op.operation_id])
+                record["input_token_verification"] = verification
+                if verification["status"] == "mismatch":
+                    record["input_token_mismatch"] = {"operation_id": op.operation_id, **verification}
                 expected = int(op.llm["recorded_output_length"])
                 if response.output_length != expected:
                     record["output_length_mismatch"] = {"operation_id": op.operation_id, "expected": expected, "actual": response.output_length}
@@ -161,12 +197,34 @@ class ReplayExecutor:
                 record["generated_output_used_downstream"] = False
             elif op.operation_type in {"tool", "transform"}:
                 typed = op.tool or op.transform
+                if op.operation_type == "tool":
+                    time.sleep(typed.get("recorded_duration_sec", 0.0))
                 if self.artifact_store and typed.get("recorded_result_ref"):
                     self.artifact_store.get_bytes(typed["recorded_result_ref"], typed.get("content_hash"))
                 record["recorded_result_used"] = True
                 record["live_external_service_called"] = False
             else:
+                state = op.state
+                if not self.artifact_store:
+                    raise ValueError("State replay requires its recorded snapshot store")
+                snapshot = self.artifact_store.get_json(state["recorded_result_ref"], state["content_hash"])
+                key = (state["state_object_id"], state["version"])
+                if any(snapshot.get(field) != value for field, value in state.items()
+                       if field not in {"recorded_result_ref", "content_hash"}):
+                    raise ValueError("State snapshot identity differs from its operation")
+                with lock:
+                    value = snapshot["value"]
+                    if state["operation"] == "write":
+                        if key in state_values:
+                            raise ValueError("A state version cannot be written twice")
+                        state_values[key] = value
+                    elif key not in state_values and state.get("initial") is True:
+                        state_values[key] = value
+                    elif key not in state_values or state_values[key] != value:
+                        raise ValueError("State read does not match the retained version")
                 record["recorded_state_transition_used"] = True
+                record["state_object_id"], record["state_version"] = key
+                record["live_external_service_called"] = False
             finished = time.perf_counter()
             record.update({"start_time": started - run_start, "finish_time": finished - run_start,
                            "target_duration_sec": finished - started, "predecessor_release_time": predecessor_finished - run_start})
@@ -225,13 +283,16 @@ class ReplayExecutor:
                         future.cancel()
                     break
         mismatches = [x["output_length_mismatch"] for x in result_records if "output_length_mismatch" in x]
+        input_mismatches = [x["input_token_mismatch"] for x in result_records if "input_token_mismatch" in x]
         completed_tasks = [task_id for task_id, task in tasks.items() if set(task.terminal_operation_ids) <= completed]
         run_info = {"cancelled": False, "completed_task_ids": completed_tasks,
-                    "output_length_mismatches": mismatches, "truncated_input": False, "context_overflow": False}
+                    "output_length_mismatches": mismatches, "input_token_mismatches": input_mismatches}
         validation = RunValidator().validate(self.trace, self.scenario, self.system, run_info)
         if any(x.get("token_mismatch") for x in result_records):
             validation.add("OUTPUT_TOKEN_MISMATCH", "Token-locked output IDs differ from the trace")
         task_records = []
+        invalid_tasks = {r["task_id"] for r in result_records if
+                         r.get("input_token_mismatch") or r.get("output_length_mismatch") or r.get("token_mismatch")}
         controlled_by_task = {}
         for task_id, task in tasks.items():
             finished_terminals = [oid for oid in task.terminal_operation_ids if oid in operation_finish]
@@ -242,15 +303,21 @@ class ReplayExecutor:
             arrival = run_start + arrival_offset
             finish = task_finish.get(task_id)
             raw = finish - arrival if finish else None
-            task_records.append({"task_id": task_id, "attempted": True, "successful": task_id in completed_tasks and error is None,
+            task_records.append({"task_id": task_id, "attempted": True,
+                                 "successful": task_id in completed_tasks and task_id not in invalid_tasks and error is None,
                                  "arrival_time": arrival_offset, "finish_time": finish - run_start if finish else None,
                                  "raw_wall_clock_latency_sec": raw,
                                  "controlled_external_delay_sec": controlled_by_task[task_id],
-                                 "task_latency_sec": max(0.0, raw - controlled_by_task[task_id]) if raw is not None else None})
+                                 "task_latency_sec": raw,
+                                 "latency_excluding_external_delay_sec": max(0.0, raw - controlled_by_task[task_id]) if raw is not None else None})
         return {"schema_version": "masbench.run/1.0.0", **validation.to_dict(), "scenario_hash": self.scenario.scenario_hash,
+                "run_id": "replay-" + uuid.uuid4().hex, "clock_origin_perf": run_start, "clock_kind": "perf_counter",
                 "workload_hash": self.trace.metadata.workload_hash, "system_hash": self.system.system_hash(),
                 "operations": sorted(result_records, key=lambda x: x["operation_id"]), "tasks": task_records,
                 "measurement_duration_sec": time.perf_counter() - run_start,
+                "input_token_verification": {
+                    status: sum(r.get("input_token_verification", {}).get("status") == status for r in result_records)
+                    for status in ("verified", "mismatch", "unavailable")},
                 "error": str(error) if error else None,
                 "replay_invariants": {"dependency_release_uses_target_completion": True,
                     "source_timestamps_used": False, "generated_output_used_downstream": False,

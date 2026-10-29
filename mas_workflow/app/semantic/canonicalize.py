@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
@@ -12,7 +13,7 @@ from app.tracing import stable_hash
 
 from .model import (
     AgentSession, ArtifactRecord, OperationRecord, SemanticTrace, StageInstance,
-    TaskRecord, TraceMetadata, sha256_json,
+    TaskRecord, TraceMetadata, StateRecord, sha256_json,
 )
 from .store import TraceBundle
 
@@ -160,7 +161,8 @@ def canonicalize_native_trace(source: str | Path, destination: str | Path, *, to
         state = sorted(src for src in op.parents if "state" in edges.get((src, oid), set()))
         common = dict(operation_id=oid, operation_type="transform" if op.kind in {"router", "retrieval"} else op.kind,
                       task_id=task_id, stage_instance_id=op.identities.get("stage_instance_id") or stage_records[0].stage_instance_id,
-                      session_id=op.identities.get("agent_instance_id") or sessions[0].session_id,
+                      session_id=op.identities.get("agent_instance_id") or (sessions[0].session_id if op.kind == "llm" else None),
+                      iteration=op.iteration,
                       control_dependencies=control, data_dependencies=data, state_dependencies=state,
                       source_observations={"duration_sec": op.duration_sec, "duration_kind": "source_observation",
                                            "events": observations.get(oid, [])})
@@ -191,12 +193,23 @@ def canonicalize_native_trace(source: str | Path, destination: str | Path, *, to
             if native_ids is not None:
                 payload["recorded_termination"] = {key: backend_metadata.get(key) for key in ("backend_finish_reason", "backend_stop_reason")}
             operations.append(OperationRecord(**common, llm=payload))
+        elif op.kind == "state":
+            ref, digest = bundle.artifacts.put_json(op.snapshot)
+            operations.append(OperationRecord(**common, state={**op.state,
+                "recorded_result_ref": ref, "content_hash": digest}))
         else:
             ref, digest = bundle.artifacts.put_json(op.snapshot)
             typed = {"identity": op.metadata.get("tool_name", op.kind), "input": op.metadata.get("tool_input"),
                      "recorded_result_ref": ref, "content_hash": digest, "deterministic_external_delay": op.duration_sec}
-            # Source tool latency is an observation, never portable workload service time.
+            # A frozen tool returns its recorded result after the recorded wait.
+            # Model execution times remain source observations, not target costs.
             controlled_delay = float(op.metadata.get("controlled_external_delay", 0.0))
+            if not math.isfinite(controlled_delay) or controlled_delay < 0:
+                raise ValueError(f"Invalid recorded external delay for {oid}")
+            if op.kind == "tool":
+                if not math.isfinite(op.duration_sec) or op.duration_sec < 0:
+                    raise ValueError(f"Invalid recorded tool duration for {oid}")
+                typed["recorded_duration_sec"] = op.duration_sec
             typed["deterministic_external_delay"] = controlled_delay
             common["controlled_external_delay"] = controlled_delay
             if op.kind == "tool": operations.append(OperationRecord(**common, tool=typed))
@@ -207,11 +220,28 @@ def canonicalize_native_trace(source: str | Path, destination: str | Path, *, to
             children[parent].add(op.operation_id)
     terminals = sorted(oid for oid, descendants in children.items() if not descendants)
     trace_id = graph.run_id
+    states = {}
+    for oid, op in graph.operations.items():
+        if op.kind != "state":
+            continue
+        state = op.state
+        key = (state["state_object_id"], state["version"])
+        producer = oid if state["operation"] == "write" else state.get("producer_operation_id")
+        record = states.setdefault(key, StateRecord(*key, "write" if producer else "read", producer))
+        if state["operation"] == "read":
+            record.consumer_operation_ids.append(oid)
+    for src, dst, kind in graph.edges:
+        if kind == "state" and graph.operations[src].kind == "state":
+            state = graph.operations[src].state
+            record = states[(state["state_object_id"], state["version"])]
+            if dst not in record.consumer_operation_ids:
+                record.consumer_operation_ids.append(dst)
     trace = SemanticTrace(
         TraceMetadata(workload_id, workload_version, trace_id, "masbench-native", source_framework_version,
                       configuration_hash=stable_hash(_workload_configuration(events)),
                       source_observations={"native_trace_sha256": stable_hash(source.read_bytes())}),
         [TaskRecord(task_id, trace_id, 0.0, terminals, "native-run-config", "completed")],
-        stage_records, sessions, operations, artifact_records)
+        stage_records, sessions, operations, artifact_records,
+        [states[key] for key in sorted(states)])
     bundle.write(trace)
     return trace

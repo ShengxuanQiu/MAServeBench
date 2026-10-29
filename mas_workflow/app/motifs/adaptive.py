@@ -142,6 +142,60 @@ def deliver_relation(runner,stage,relation,items,mid):
     return materialize(runner,stage,list(items),mid,spec)
 
 
+def state_operation(runner, stage, inputs, mid):
+    """Execute an actual versioned read/write and record its required edge."""
+    ctx = runner._stage_context[mid]
+    params = stage.get('parameters', {})
+    key = params['state_object_id']
+    writing = stage['atomic']['kind'] == 'state_write'
+    node = 'state_' + uuid4().hex
+    identity = {'stage_instance_id': ctx['id'], 'atomic_instance_id': mid,
+                'role': stage['atomic']['role']}
+    with runner.state_store.lock:
+        if writing:
+            try:
+                previous = runner.state_store.read(key)
+            except KeyError:
+                previous = None
+            if 'value' not in params and not inputs:
+                raise ValueError('state_write requires a value or an input artifact')
+            value = params['value'] if 'value' in params else inputs[-1].content
+            version = previous.version + 1 if previous else 0
+            producer = previous.producer_operation_id if previous else None
+            state = {'state_object_id': key, 'version': version, 'operation': 'write',
+                     'previous_producer_operation_id': producer}
+        else:
+            current = runner.state_store.read(key, params.get('version'))
+            version, value, producer = current.version, current.value, current.producer_operation_id
+            state = {'state_object_id': key, 'version': version, 'operation': 'read',
+                     'producer_operation_id': producer, 'initial': producer is None}
+        parents = list(dict.fromkeys(ctx['parents'] + [a.producer_node for a in inputs] +
+                                     ([producer] if producer else [])))
+        runner.trace.emit(event_type='operation_start', node_id=node, operation_kind='state',
+                          parents=parents, state=state, **identity)
+        started = time.perf_counter()
+        for parent in ctx['parents']:
+            runner.trace.emit(event_type='dependency', src=parent, dst=node, dependency_kind='control', **identity)
+        for artifact in inputs:
+            runner.trace.emit(event_type='dependency', src=artifact.producer_node, dst=node, dependency_kind='data', **identity)
+            runner.trace.emit(event_type='artifact_consume', node_id=node, artifact_id=artifact.artifact_id, **identity)
+        if producer:
+            runner.trace.emit(event_type='dependency', src=producer, dst=node, dependency_kind='state', **identity)
+        try:
+            if writing:
+                value = runner.state_store.write(key, value, node, params.get('expected_version')).value
+        except Exception as exc:
+            runner.trace.emit(event_type='operation_fail', node_id=node, error=str(exc), **identity)
+            raise
+        snapshot = {**state, 'value': value}
+        runner.trace.emit(event_type='operation_finish', node_id=node, tool_snapshot=snapshot,
+                          duration_sec=time.perf_counter() - started, **identity)
+        result = Artifact(value if isinstance(value, str) else json.dumps(value, ensure_ascii=False), node)
+        runner._produce(result, identity)
+        ctx['nodes'].append(node)
+        return result
+
+
 def atomic_stage(runner,stage,inputs,mid):
     ctx=runner._stage_context[mid];ctx['atomic']=True
     inputs=deliver(runner,stage,inputs,mid)
@@ -151,6 +205,8 @@ def atomic_stage(runner,stage,inputs,mid):
     if kind=='llm':
         agent=AgentInstance(RoleSlot(role),RoleBinding(**stage['roles'][role]),mid)
         result=runner._call(agent,stage['task'],artifacts)
+    elif kind in {'state_read', 'state_write'}:
+        result=state_operation(runner,stage,artifacts,mid)
     else:
         def transform():
             if kind=='tool':
