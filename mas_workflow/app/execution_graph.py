@@ -33,7 +33,7 @@ def normalize_event(event):
                                  "operation_start": "started", "operation_finish": "finished",
                                  "operation_fail": "failed"}.get(kind, "")
     operation_keys = {"operation_id", "request_id", "stage_instance_id", "motif_instance_id", "atomic_instance_id", "agent_instance_id",
-                      "role", "operation_kind", "operation_phase", "request_payload", "request_metadata", "status", "error"}
+                      "role", "operation_kind", "operation_phase", "request_payload", "request_metadata", "status", "error", "iteration", "state"}
     flow_keys = {"parents", "artifact_id", "source_artifact_id", "content", "producer_operation_id",
                  "src", "dst", "dependency_kind", "decision", "waiting_for_nodes", "tool_snapshot", "delivery_mode", "source_artifact_ids",
                  "delivered_artifact_id","consumer_operation_id","delivery_selector","delivery_transform","materialized_bytes","materialized_tokens_est"}
@@ -81,6 +81,8 @@ class Operation:
     duration_sec: float = 0.0
     identities: dict[str, str] = field(default_factory=dict)
     output_tokens: int | None = None
+    iteration: int = 0
+    state: dict[str, Any] | None = None
 
 
 @dataclass
@@ -133,6 +135,16 @@ class ExecutionGraph:
                                     semantics=event.get("stage_semantics",self.stages[sid]["semantics"]))
         if kind in {"operation_start", "request_ready", "request_submit"}:
             op = self.operations[oid]
+            iteration = event.get("iteration", event.get("round_id"))
+            if iteration is not None:
+                if type(iteration) is not int or iteration < 0:
+                    raise ValueError("Operation iteration must be a nonnegative integer")
+                op.iteration = iteration
+            if kind == "operation_start":
+                op.metadata.update(event.get("operation_metadata") or {})
+                if "controlled_external_delay" in event:
+                    op.metadata["controlled_external_delay"] = event["controlled_external_delay"]
+                op.state = event.get("state")
             if kind == "request_ready":
                 op.request_id = event["request_id"]
             op.parents.update(event.get("parents", []))
@@ -189,7 +201,7 @@ class ExecutionGraph:
                 if (parent, oid) not in typed_pairs:
                     self.edges.add((parent, oid, "control"))
         for src, dst, kind in self.edges:
-            if src not in parents or dst not in parents or kind not in {"data", "control"}:
+            if src not in parents or dst not in parents or kind not in {"data", "control", "state"}:
                 raise ValueError(f"Dangling/invalid dependency: {src} -> {dst}")
             parents[dst].add(src)
         for aid, artifact in self.artifacts.items():
@@ -235,8 +247,29 @@ class ExecutionGraph:
             raise ValueError("Duplicate request IDs")
         for oid, op in self.operations.items():
             op.parents = parents[oid]
-            if op.kind not in {"llm", "tool", "transform", "router", "retrieval"}:
+            if op.kind not in {"llm", "tool", "transform", "router", "retrieval", "state"}:
                 raise ValueError(f"Unsupported operation kind: {op.kind}")
+            if op.kind == "state":
+                state = op.state or {}
+                if (not isinstance(state.get("state_object_id"), str) or not state["state_object_id"]
+                        or type(state.get("version")) is not int or state["version"] < 0
+                        or state.get("operation") not in {"read", "write"}):
+                    raise ValueError("State operation requires object, version, and read/write identity")
+                read = state["operation"] == "read"
+                producer = state.get("producer_operation_id" if read else "previous_producer_operation_id")
+                if read and not producer and state.get("initial") is not True:
+                    raise ValueError("A state read requires its writer or an explicit initial snapshot")
+                if producer:
+                    writer = self.operations.get(producer)
+                    expected_version = state["version"] if read else state["version"] - 1
+                    if (not writer or writer.kind != "state" or not writer.state
+                            or writer.state.get("operation") != "write"
+                            or writer.state.get("state_object_id") != state["state_object_id"]
+                            or writer.state.get("version") != expected_version
+                            or (producer, oid, "state") not in self.edges):
+                        raise ValueError("State operation lacks its required version dependency")
+                    if replay and read and writer.snapshot.get("value") != op.snapshot.get("value"):
+                        raise ValueError("State read value differs from its recorded writer")
             if replay and (op.status != "completed" or (op.kind == "llm" and not op.payload) or (op.kind != "llm" and op.snapshot is None)):
                 raise ValueError(f"Incomplete operation cannot be replayed: {oid}")
             if replay and op.kind == "llm":

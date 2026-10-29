@@ -17,6 +17,7 @@ from .tracing import TraceContext, estimate_tokens, stable_hash, token_count_sou
 from .backend_adapters import BackendTraceAdapter, build_backend_trace_adapter
 from .backend_metrics import BackendMetricsSampler, metrics_url_from_base_url, summarize_backend_metrics
 from .admission import AdmissionController
+from .versioned_state import VersionedStateStore
 
 
 @dataclass
@@ -116,6 +117,7 @@ class WorkloadRuntime:
         self.search_provider = search_provider
         self.trace = trace
         self.artifacts: dict[str, str] = {}
+        self.state_store = VersionedStateStore()
         self.backend_metrics_sampler: BackendMetricsSampler | None = None
         self.backend_trace_adapter: BackendTraceAdapter = build_backend_trace_adapter(config.backend_trace_adapter)
         self.admission_controller = AdmissionController(
@@ -143,6 +145,8 @@ class WorkloadRuntime:
             node_type="workflow",
             motif_tags=self.motif_tags,
             status="start",
+            clock_origin_perf=self.trace.start_perf,
+            clock_kind="perf_counter",
             extra={"query_hash": stable_hash(self.config.query), "config": self._config_dict()},
         )
 

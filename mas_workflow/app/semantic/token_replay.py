@@ -158,6 +158,7 @@ class VLLMEngineBackend:
         ids = list(out.token_ids)
         return BackendResult(out.text, ids, len(ids), {
             "wall_time_sec": time.perf_counter() - started,
+            "request_submit_perf": started, "request_completion_perf": time.perf_counter(),
             "backend_response_id": request_id, "engine_output_updates": updates,
             "prompt_token_ids": list(final.prompt_token_ids),
             "finish_reason": out.finish_reason, "stop_reason": out.stop_reason,

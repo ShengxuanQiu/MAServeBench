@@ -20,8 +20,13 @@ def task_metrics(run: dict[str, Any], *, slo_sec: float, accelerator_count: int,
                  physical_power_watts: float | None = None) -> dict[str, Any]:
     tasks = run.get("tasks", [])
     attempted = len(tasks)
-    latencies = [x["task_latency_sec"] for x in tasks if x.get("successful") and x.get("task_latency_sec") is not None]
-    good = sum(bool(x.get("successful")) and x.get("task_latency_sec") is not None and x["task_latency_sec"] <= slo_sec for x in tasks)
+    # Prefer arrival-to-completion even when reading older runs whose primary
+    # task_latency_sec subtracted external waits.
+    def latency(task):
+        raw = task.get("raw_wall_clock_latency_sec")
+        return raw if raw is not None else task.get("task_latency_sec")
+    latencies = [latency(x) for x in tasks if x.get("successful") and latency(x) is not None]
+    good = sum(bool(x.get("successful")) and latency(x) is not None and latency(x) <= slo_sec for x in tasks)
     duration = float(run.get("measurement_duration_sec") or 0.0)
     goodput = good / duration if duration > 0 else 0.0
     result = {

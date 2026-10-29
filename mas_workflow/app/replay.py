@@ -150,17 +150,24 @@ def replay_trace(path, deployment, *, trace_dir="traces/replay", strict=False, b
             runtime.call_llm(node_id=ids[oid], node_name=op.metadata.get("role_slot", "replay"), node_type="llm",
                              agent_role=op.metadata.get("agent_role", "replay"), prompt_template="recorded_payload",
                              system_prompt=messages[0]["content"], user_prompt=messages[1]["content"], parents=parents,
-                             llm_override=RecordedBackend(),
+                             llm_override=RecordedBackend(), round_id=op.iteration,
                              extra_metadata={**{k: v for k, v in op.metadata.items() if k not in {"request_id_for_backend", "agent_id"}},
                                              **identity, "request_max_output_tokens": payload["max_tokens"],
                                              "recorded_request_payload": payload,
                                              "source_operation_id": oid, "source_request_id": op.request_id,
                                              "recorded_output_tokens": op.output_tokens})
         else:
-            trace.emit(event_type="operation_start", node_id=ids[oid], operation_kind=op.kind, parents=parents, **identity)
+            state = deepcopy(op.state)
+            if state:
+                for key in ("producer_operation_id", "previous_producer_operation_id"):
+                    if state.get(key):
+                        state[key] = ids[state[key]]
+            trace.emit(event_type="operation_start", node_id=ids[oid], operation_kind=op.kind,
+                       parents=parents, iteration=op.iteration, state=state, **identity)
             started = time.perf_counter()
             time.sleep(max(0.0, op.duration_sec))
-            trace.emit(event_type="operation_finish", node_id=ids[oid], tool_snapshot=op.snapshot,
+            snapshot = {**op.snapshot, **state} if state else op.snapshot
+            trace.emit(event_type="operation_finish", node_id=ids[oid], tool_snapshot=snapshot,
                        duration_sec=time.perf_counter() - started, source_operation_id=oid, **identity)
         for aid, artifact in produced[oid]:
             trace.emit(event_type="artifact_created", node_id=ids[oid], artifact_id=artifact_ids[aid],

@@ -131,7 +131,8 @@
           "dependency_kind": {
             "enum": [
               "data",
-              "control"
+              "control",
+              "state"
             ]
           }
         }
@@ -168,7 +169,7 @@
     },
     {
       "if": {"properties":{"canonical_type":{"const":"operation_start"}}},
-      "then": {"required":["operation_kind"],"properties":{"operation_kind":{"enum":["tool","transform","router","retrieval"]}}}
+      "then": {"required":["operation_kind"],"properties":{"operation_kind":{"enum":["tool","transform","router","retrieval","state"]}}}
     },
     {
       "if": {"properties":{"canonical_type":{"const":"artifact_delivery"}}},

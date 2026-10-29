@@ -1,6 +1,7 @@
 """Four validation layers used by official MASBench runs."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -59,17 +60,30 @@ class SchemaValidator:
         if not trace.tasks or not trace.operations:
             report.add("SCHEMA_ERROR", "Trace requires at least one task and operation")
         for stage in trace.stages:
-            if stage.template_type not in TEMPLATE_TYPES or stage.iteration < 0:
+            if stage.template_type not in TEMPLATE_TYPES or type(stage.iteration) is not int or stage.iteration < 0:
                 report.add("SCHEMA_ERROR", "Invalid stage template or iteration", stage_instance_id=stage.stage_instance_id)
         for session in trace.sessions:
             if session.lifecycle_relation not in LIFECYCLE_RELATIONS or session.context_initialization not in CONTEXT_INITIALIZATIONS:
                 report.add("SCHEMA_ERROR", "Invalid session lifecycle/context initialization", session_id=session.session_id)
         for op in trace.operations:
-            if op.operation_type not in OPERATION_TYPES or op.controlled_external_delay < 0:
+            if (op.operation_type not in OPERATION_TYPES or type(op.iteration) is not int or op.iteration < 0
+                    or type(op.controlled_external_delay) not in {int, float}
+                    or not math.isfinite(op.controlled_external_delay) or op.controlled_external_delay < 0):
                 report.add("SCHEMA_ERROR", "Invalid operation type or external delay", operation_id=op.operation_id)
             typed = {"llm": op.llm, "tool": op.tool, "transform": op.transform, "state": op.state}
-            if typed[op.operation_type] is None or sum(value is not None for value in typed.values()) != 1:
+            if typed.get(op.operation_type) is None or sum(value is not None for value in typed.values()) != 1:
                 report.add("SCHEMA_ERROR", "Operation requires exactly one matching typed payload", operation_id=op.operation_id)
+            if op.tool and "recorded_duration_sec" in op.tool:
+                duration = op.tool["recorded_duration_sec"]
+                if type(duration) not in {int, float} or not math.isfinite(duration) or duration < 0:
+                    report.add("SCHEMA_ERROR", "Tool duration must be finite and nonnegative", operation_id=op.operation_id)
+            if op.state:
+                state = op.state
+                if (not isinstance(state.get("state_object_id"), str) or not state["state_object_id"]
+                        or type(state.get("version")) is not int or state["version"] < 0
+                        or state.get("operation") not in {"read", "write"}
+                        or not state.get("recorded_result_ref") or not state.get("content_hash")):
+                    report.add("SCHEMA_ERROR", "State operation requires identity, version, and a recorded snapshot", operation_id=op.operation_id)
         return report
 
 
@@ -93,6 +107,18 @@ class SemanticValidator:
                 report.add("INVALID_HIERARCHY", "Unknown parent session", session_id=session.session_id)
             if session.lifecycle_relation == "root" and session.parent_session_id:
                 report.add("INVALID_HIERARCHY", "Root session cannot have a parent", session_id=session.session_id)
+        for name, graph in (
+            ("Stage dependencies", {s.stage_instance_id: set(s.stage_dependencies) for s in trace.stages}),
+            ("Stage hierarchy", {s.stage_instance_id: {s.parent_stage_instance_id} if s.parent_stage_instance_id else set() for s in trace.stages}),
+            ("Session hierarchy", {s.session_id: {s.parent_session_id} if s.parent_session_id else set() for s in trace.sessions}),
+        ):
+            done = set()
+            while len(done) < len(graph):
+                ready = {node for node, deps in graph.items() if node not in done and deps <= done}
+                if not ready:
+                    report.add("INVALID_HIERARCHY", name + " contains a cycle or missing parent")
+                    break
+                done.update(ready)
         parents: dict[str, set[str]] = {}
         for op in trace.operations:
             if op.task_id not in tasks or op.stage_instance_id not in stages or (op.session_id and op.session_id not in sessions):
@@ -112,6 +138,19 @@ class SemanticValidator:
                 for aid in op.llm.get("context_artifact_ids", []):
                     if aid not in artifacts or op.operation_id not in artifacts[aid].consumer_operation_ids:
                         report.add("INVALID_CONTEXT_REFERENCE", "Context artifact provenance is incomplete", operation_id=op.operation_id, artifact_id=aid)
+            if op.state and type(op.state.get("version")) is int and op.state.get("operation") in {"read", "write"}:
+                state = op.state
+                read = state["operation"] == "read"
+                producer = state.get("producer_operation_id" if read else "previous_producer_operation_id")
+                if read and not producer and state.get("initial") is not True:
+                    report.add("MISSING_DEPENDENCY", "State read lacks its writer or explicit initial snapshot", operation_id=op.operation_id)
+                if producer:
+                    writer = opmap.get(producer)
+                    version = state.get("version", 0) - (0 if read else 1)
+                    if (not writer or not writer.state or writer.state.get("operation") != "write"
+                            or writer.state.get("state_object_id") != state.get("state_object_id")
+                            or writer.state.get("version") != version or producer not in op.state_dependencies):
+                        report.add("MISSING_DEPENDENCY", "State operation lacks its required version writer", operation_id=op.operation_id)
         done: set[str] = set()
         while len(done) < len(parents):
             ready = {oid for oid, deps in parents.items() if oid not in done and deps <= done}
@@ -126,8 +165,10 @@ class SemanticValidator:
                 report.add("INVALID_CONTEXT_REFERENCE", "Artifact consumer does not exist", artifact_id=artifact.artifact_id)
         state_versions: dict[str, list[int]] = {}
         for state in trace.shared_state:
-            if state.operation not in {"read", "write"} or state.version < 0:
+            if (not isinstance(state.state_object_id, str) or not state.state_object_id
+                    or state.operation not in {"read", "write"} or type(state.version) is not int or state.version < 0):
                 report.add("SCHEMA_ERROR", "Invalid shared-state operation/version", state_object_id=state.state_object_id)
+                continue
             if state.producer_operation_id and state.producer_operation_id not in opmap:
                 report.add("MISSING_DEPENDENCY", "Shared-state producer does not exist", state_object_id=state.state_object_id)
             for consumer in state.consumer_operation_ids:
@@ -135,8 +176,24 @@ class SemanticValidator:
                     report.add("MISSING_DEPENDENCY", "Shared-state read lacks a state dependency", state_object_id=state.state_object_id, consumer_operation_id=consumer)
             state_versions.setdefault(state.state_object_id, []).append(state.version)
         for state_id, versions in state_versions.items():
-            if len(versions) != len(set(versions)) or sorted(versions) != list(range(min(versions), max(versions) + 1)):
-                report.add("INVALID_CONTEXT_REFERENCE", "Shared-state versions are duplicate or non-contiguous", state_object_id=state_id)
+            # A trace may touch a subset of versions restored from a snapshot.
+            if len(versions) != len(set(versions)):
+                report.add("INVALID_CONTEXT_REFERENCE", "Shared-state versions are duplicate", state_object_id=state_id)
+        state_records = {(s.state_object_id, s.version): s for s in trace.shared_state
+                         if isinstance(s.state_object_id, str) and type(s.version) is int}
+        for op in trace.operations:
+            if (not op.state or not isinstance(op.state.get("state_object_id"), str)
+                    or type(op.state.get("version")) is not int):
+                continue
+            state = op.state
+            record = state_records.get((state["state_object_id"], state["version"]))
+            if state.get("operation") == "write":
+                valid = record and record.producer_operation_id == op.operation_id
+            else:
+                valid = (record and op.operation_id in record.consumer_operation_ids
+                         and record.producer_operation_id == state.get("producer_operation_id"))
+            if not valid:
+                report.add("INVALID_CONTEXT_REFERENCE", "State operation and version provenance disagree", operation_id=op.operation_id)
         for task in trace.tasks:
             if task.trace_id != trace.metadata.trace_id or any(x not in opmap for x in task.terminal_operation_ids):
                 report.add("INVALID_HIERARCHY", "Task trace/terminal mapping is invalid", task_id=task.task_id)
@@ -225,6 +282,8 @@ class RunValidator:
                     report.add("INCOMPLETE_TASK", "Attempted task did not complete", task_id=task.task_id)
             for mismatch in run.get("output_length_mismatches", []):
                 report.add("OUTPUT_LENGTH_MISMATCH", "Backend output length differs from recorded length", **mismatch)
+            for mismatch in run.get("input_token_mismatches", []):
+                report.add("TOKENIZER_MISMATCH", "Backend input differs from the resolved input contract", **mismatch)
             if run.get("truncated_input"):
                 report.add("TRUNCATED_INPUT", "SUT truncated a benchmark input")
             if run.get("context_overflow"):

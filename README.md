@@ -20,6 +20,8 @@ mas_workflow/
   app/execution_graph.py          realized DAG and typed native dependencies
   app/semantic/                   portable bundles, validation, scenarios, replay
   app/backend_adapters.py         serving/device telemetry normalization
+  app/versioned_state.py          native state versions and snapshot restoration
+  app/measurements.py             scheduler/batch/operator record and join API
   app/publication.py, study.py    reproducible matrices and arrival schedules
   app/mixed_study.py, capacity.py mixed workloads and SLO/capacity analysis
   configs/                       JSON/YAML examples and versioned schemas
@@ -93,6 +95,12 @@ python -m app.benchmark run --experiment outputs/experiment.json --trace-dir out
 Available helper presets are `matched_parallel`, `matched_chain`, `parallel_refine`,
 and `peer`; the Python API and publication configurations expose additional
 families and compositions. See [architecture](docs/ARCHITECTURE.md).
+
+Native workflows can also use atomic `state_write`/`state_read` stages with exact
+version provenance and initial snapshots. The measurement interface records and
+joins backend scheduling, batch membership, and operator observations to native
+task/stage/operation identities with explicit clock alignment. See
+[state and measurement APIs](docs/STATE_AND_MEASUREMENTS.md).
 
 ## GPU / Ascend serving
 

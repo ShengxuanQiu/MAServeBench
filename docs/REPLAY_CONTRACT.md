@@ -22,16 +22,24 @@ template requires explicit resolution rather than silently rehashing a run input
 parents finish on the target and after declared external delay. The source host's
 timestamps are diagnostic. Tool and transform results come from recorded
 artifacts; replay does not repeat live external tools or regenerate downstream
-requests from new model outputs. State operations are recorded transitions, not
-restoration of a live external database.
+requests from new model outputs. State operations apply recorded versioned
+transitions and value snapshots without calling a live external database. Native
+state stages and initial snapshots are described in
+[state and measurement APIs](STATE_AND_MEASUREMENTS.md).
+
+Collected tools retain `recorded_duration_sec`, which replay waits inside the
+tool operation before returning its result. An explicit
+`controlled_external_delay` is a separate wait before readiness. Source LLM and
+kernel timings remain diagnostic observations, not target service times.
 
 The vLLM adapter deep-copies each resolved request, enforces the recorded output
 length, switches to non-streaming transport, and removes transport-only streaming
 options. Other recorded generation settings are retained. Reported output length
-must match. The implementation does not independently verify every server-side
-tokenizer configuration or expose a universal context-overflow detector; pin and
-record the server/tokenizer configuration. Native real-model collection and
-replay require the same model-input contract.
+must match. Target-reported prompt token IDs or usage counts are compared with
+the resolved input contract; explicit mismatches invalidate the run and affected
+task. Missing target input evidence remains unavailable, not proof of an unchanged
+server input. Pin and record the server/tokenizer configuration; native collection
+and replay require the same model-input contract.
 
 ## Required and optional controls
 
@@ -52,10 +60,15 @@ independence alone is not a proof of application-level semantic equivalence.
 ## Fidelity and metrics
 
 `length_locked` is supported by the vLLM OpenAI adapter. `token_locked` is supported
-only by the synthetic exact backend. Native event replay is a separate best-effort
-compatibility path. Validation failures remain failures; task metrics retain
-attempted tasks in SLO denominators. Telemetry labels observed, backend-reported,
-estimated, and unavailable values separately.
+by the opt-in CUDA vLLM 0.30.0 engine adapter in its documented dense-Qwen3/
+Model-Runner-V2 profile and by the synthetic conformance backend. Ordinary HTTP
+and Ascend adapters reject it. See [token replay](TOKEN_REPLAY.md). Native event
+replay is a separate best-effort compatibility path. Validation failures remain
+failures; task metrics retain attempted tasks in SLO denominators. Primary task
+latency and deadlines use arrival to completion, including tool/external waits.
+The separately named `latency_excluding_external_delay_sec` is diagnostic only.
+Metrics prefer raw arrival-to-completion when reading older run files. Telemetry
+labels observed, backend-reported, estimated, and unavailable values separately.
 
 ## Scenario execution scope
 
